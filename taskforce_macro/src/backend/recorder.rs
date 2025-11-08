@@ -1,11 +1,11 @@
-use crate::models::{MacroEvent, MacroEventType, MouseButton};
+use crate::models::{MacroEvent, MacroEventType, MouseButton, MouseMode};
 use std::sync::{
     Arc,
     Mutex,
     atomic::{AtomicBool, Ordering}
 };
 use std::thread;
-use std::time::Instant;
+use std::time::{Instant};
 use std::sync::atomic::AtomicU32;
 
 use windows::Win32::Foundation::*;
@@ -14,18 +14,34 @@ use windows::Win32::System::LibraryLoader::*;
 
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+
 pub struct Recorder {
     events: Arc<Mutex<Vec<MacroEvent>>>,
+    recording: Arc<AtomicBool>,
+    mouse_mode: Arc<Mutex<MouseMode>>,  // Changed to Arc<Mutex> for thread safety
     stop_flag: Arc<AtomicBool>,
     thread_id: Arc<AtomicU32>,
+    last_mouse_pos: Arc<Mutex<Option<(i32, i32)>>>,  // Thread-safe last position
 }
 
 impl Recorder {
     pub fn new(events: Arc<Mutex<Vec<MacroEvent>>>) -> Self {
         Self {
             events,
+            recording: Arc::new(AtomicBool::new(false)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             thread_id: Arc::new(AtomicU32::new(0)),
+            mouse_mode: Arc::new(Mutex::new(MouseMode::Absolute)),  // Initialize properly
+            last_mouse_pos: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_mouse_mode(&self, mode: MouseMode) {
+        if let Ok(mut guard) = self.mouse_mode.lock() {
+            *guard = mode;
+        }
+        if let Ok(mut guard) = self.last_mouse_pos.lock() {
+            *guard = None;  // Reset when mode changes
         }
     }
 
@@ -36,6 +52,8 @@ impl Recorder {
         let events = Arc::clone(&self.events);
         let stop_flag = Arc::clone(&self.stop_flag);
         let tid_store = Arc::clone(&self.thread_id);
+        let mouse_mode = Arc::clone(&self.mouse_mode);  // Share mouse mode
+        let last_mouse_pos = Arc::clone(&self.last_mouse_pos);  // Share last position
 
         thread::spawn(move || unsafe {
             // Shared state for hook procedures
@@ -45,6 +63,8 @@ impl Recorder {
                 events,
                 stop_flag,
                 last_time: Instant::now(),
+                mouse_mode,  // Add to dispatcher
+                last_mouse_pos,  // Add to dispatcher
             });
 
             DISP_PTR = Box::into_raw(dispatcher);
@@ -93,13 +113,66 @@ impl Recorder {
                             let delay = now.duration_since(disp.last_time).as_millis() as u64;
                             disp.last_time = now;
 
+                            // Get current mouse mode
+                            let current_mode = if let Ok(guard) = disp.mouse_mode.lock() {
+                                guard.clone()
+                            } else {
+                                MouseMode::Absolute
+                            };
+
                             let event = match wparam.0 as u32 {
-                                WM_MOUSEMOVE => MacroEvent {
-                                    ev: MacroEventType::MouseMove {
-                                        x: ms.pt.x,
-                                        y: ms.pt.y,
-                                    },
-                                    delay,
+                                WM_MOUSEMOVE => {
+                                    match current_mode {
+                                        MouseMode::Absolute => {
+                                            // Record absolute position
+                                            MacroEvent {
+                                                ev: MacroEventType::MouseMove {
+                                                    x: ms.pt.x,
+                                                    y: ms.pt.y,
+                                                },
+                                                delay,
+                                            }
+                                        }
+                                        MouseMode::Relative => {
+                                            // Record relative movement
+                                            let mut last_pos_guard = disp.last_mouse_pos.lock().unwrap();
+                                            let relative_event = if let Some((last_x, last_y)) = *last_pos_guard {
+                                                let dx = ms.pt.x - last_x;
+                                                let dy = ms.pt.y - last_y;
+                                                // Only record if there was actual movement
+                                                if dx != 0 || dy != 0 {
+                                                    Some(MacroEvent {
+                                                        ev: MacroEventType::MouseMove {
+                                                            x: dx,
+                                                            y: dy,
+                                                        },
+                                                        delay,
+                                                    })
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                // First position - record as (0, 0) movement
+                                                Some(MacroEvent {
+                                                    ev: MacroEventType::MouseMove {
+                                                        x: 0,
+                                                        y: 0,
+                                                    },
+                                                    delay,
+                                                })
+                                            };
+                                            
+                                            // Update last position
+                                            *last_pos_guard = Some((ms.pt.x, ms.pt.y));
+                                            
+                                            // Return the event if we have one, otherwise continue
+                                            if let Some(ev) = relative_event {
+                                                ev
+                                            } else {
+                                                return CallNextHookEx(None, code, wparam, lparam);
+                                            }
+                                        }
+                                    }
                                 },
                                 WM_LBUTTONDOWN => MacroEvent {
                                     ev: MacroEventType::MouseDown {
@@ -199,4 +272,6 @@ struct Dispatcher {
     events: Arc<Mutex<Vec<MacroEvent>>>,
     stop_flag: Arc<AtomicBool>,
     last_time: Instant,
+    mouse_mode: Arc<Mutex<MouseMode>>,  // Added
+    last_mouse_pos: Arc<Mutex<Option<(i32, i32)>>>,  // Added
 }
