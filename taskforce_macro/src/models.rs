@@ -22,3 +22,28 @@ pub struct MacroEvent {
     pub ev: MacroEventType,
     pub delay: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MouseMode {
+    Absolute,
+    Relative,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybackSettings {
+    pub mouse_mode: MouseMode,
+    pub speed: f32,
+    pub repeat_count: u32,
+    pub infinite: bool,
+}
+
+impl Default for PlaybackSettings {
+    fn default() -> Self {
+        Self {
+            mouse_mode: MouseMode::Absolute,
+            speed: 1.0,
+            repeat_count: 1,
+            infinite: false,
+        }
+    }
+}
