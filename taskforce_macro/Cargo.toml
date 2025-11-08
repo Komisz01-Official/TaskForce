@@ -1,0 +1,34 @@
+[package]
+name = "taskforce_windows"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[package.metadata]
+build_script = "build.rs"
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+image = "0.25"
+
+# Windows bindings stable for this project
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Console"
+] }
+
+[build-dependencies]
+embed-resource = "1.8"
+winres = "0.1.12"
+
+[package.metadata.windows]
+console = false
