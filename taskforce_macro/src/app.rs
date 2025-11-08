@@ -1,9 +1,10 @@
-use crate::models::MacroEvent;
 use crate::backend::{Recorder, Player, storage};
 use crate::backend;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Receiver;
+
+use crate::models::{MacroEvent, MouseMode, PlaybackSettings};
 
 use std::time::Duration;
 
@@ -21,6 +22,7 @@ pub struct TaskForceApp {
     infinite_loop: bool,
     // hotkey rx
     rx: Receiver<backend::Command>,
+    playback_settings: PlaybackSettings,
 }
 
 impl TaskForceApp {
@@ -38,6 +40,7 @@ impl TaskForceApp {
             play_count: 1,
             play_speed: 1.0,
             infinite_loop: false,
+            playback_settings: PlaybackSettings::default(),
             rx,
         }
     }
@@ -65,9 +68,47 @@ impl TaskForceApp {
                 self.status = "❌ Nothing recorded".into();
                 return;
             }
-            self.player.play(events, self.play_count, self.play_speed, self.infinite_loop);
+             self.player.play(
+                events, 
+                self.playback_settings.repeat_count, 
+                self.playback_settings.speed, 
+                self.playback_settings.infinite,
+                self.playback_settings.mouse_mode.clone(),
+            );
             self.playing = true;
-            self.status = format!("▶ Playing ({}x, {} times{})", self.play_speed, self.play_count, if self.infinite_loop { " infinite" } else { "" });
+            let mode_str = match self.playback_settings.mouse_mode {
+                MouseMode::Absolute => "absolute",
+                MouseMode::Relative => "relative",
+            };
+            self.status = format!("▶ Playing ({}x, {} times{}, {} mode)", self.play_speed, self.play_count, if self.infinite_loop { " infinite" } else { "" }, mode_str);
+        }
+    }
+
+    fn update_recorder_mode(&mut self) {
+        self.recorder.set_mouse_mode(self.playback_settings.mouse_mode.clone());
+    }
+
+    // Add this new method to handle mode switching
+    fn on_mouse_mode_changed(&mut self, previous_mode: MouseMode) {
+        self.update_recorder_mode();
+        
+        // Clear old recordings when switching modes to avoid coordinate confusion
+        let mut events = self.events.lock().unwrap();
+        if !events.is_empty() {
+            events.clear();
+            self.status = format!("🔄 Switched to {} mouse mode - old recording cleared", 
+                match self.playback_settings.mouse_mode {
+                    MouseMode::Absolute => "absolute",
+                    MouseMode::Relative => "relative",
+                }
+            );
+        } else {
+            self.status = format!("🔄 Switched to {} mouse mode", 
+                match self.playback_settings.mouse_mode {
+                    MouseMode::Absolute => "absolute",
+                    MouseMode::Relative => "relative",
+                }
+            );
         }
     }
 
@@ -137,6 +178,22 @@ impl eframe::App for TaskForceApp {
                 ui.add(egui::Slider::new(&mut self.play_speed, 0.1..=5.0).suffix("×"));
                 ui.add_space(6.0);
                 ui.checkbox(&mut self.infinite_loop, "♾ Infinite");
+            });
+
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                ui.label("Mouse:");
+                
+                // Store previous mode to detect changes
+                let previous_mode = self.playback_settings.mouse_mode.clone();
+                
+                ui.radio_value(&mut self.playback_settings.mouse_mode, MouseMode::Absolute, "Absolute");
+                ui.radio_value(&mut self.playback_settings.mouse_mode, MouseMode::Relative, "Relative");
+                
+                // Update recorder and clear recordings if mode changed
+                if previous_mode != self.playback_settings.mouse_mode {
+                    self.on_mouse_mode_changed(previous_mode);
+                }
             });
 
             ui.separator();
